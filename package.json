@@ -1,0 +1,16 @@
+{
+  "name": "productai-root",
+  "version": "1.0.0",
+  "description": "ProductAI — Intelligent AI Product Recommendation & Shopping Assistant (B.Tech CSE Final-Year Project)",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "start": "node backend/src/server.js",
+    "build": "npm run build --prefix frontend",
+    "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
+    "render-build": "npm install && npm install --prefix backend && npm install --prefix frontend && npm run build --prefix frontend",
+    "render-start": "node backend/src/server.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
