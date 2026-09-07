@@ -4,11 +4,43 @@ const OpenAI = require('openai');
 const aiEngine = require('./aiEngine');
 const productStore = require('./productStore');
 
+function extractJSON(text) {
+  if (!text || typeof text !== 'string') return null;
+  try {
+    return JSON.parse(text.trim());
+  } catch (e) {}
+
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) {
+    try {
+      return JSON.parse(fenceMatch[1].trim());
+    } catch (e) {}
+  }
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+    } catch (e) {}
+  }
+
+  const firstBracket = text.indexOf('[');
+  const lastBracket = text.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    try {
+      return JSON.parse(text.slice(firstBracket, lastBracket + 1));
+    } catch (e) {}
+  }
+
+  return null;
+}
+
 class LLMService {
   constructor() {
     this.geminiKey = process.env.GEMINI_API_KEY || '';
     this.openaiKey = process.env.OPENAI_API_KEY || '';
-    this.preferredProvider = process.env.AI_MODEL_PROVIDER || 'gemini'; // Default directly to gemini
+    this.preferredProvider = process.env.AI_MODEL_PROVIDER || 'gemini';
     this.geminiClient = null;
     this.openaiClient = null;
 
@@ -57,7 +89,7 @@ class LLMService {
       return {
         activeProvider: 'gemini',
         name: 'Google Gemini (Real-Time AI)',
-        model: 'gemini-3.6-flash',
+        model: 'gemini-3.1-flash-lite / gemini-flash',
         isRealLLM: true,
         hasGeminiKey: true,
         hasOpenaiKey: Boolean(this.openaiClient)
@@ -123,7 +155,13 @@ class LLMService {
 
     const fullPrompt = `${systemPrompt}\n\n${contextStr}User Query: "${userMessage}"`;
 
-    const candidateModels = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-1.5-flash'];
+    const candidateModels = [
+      'gemini-3.1-flash-lite',
+      'gemini-flash-latest',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-3.6-flash'
+    ];
     let lastError = null;
 
     for (const modelName of candidateModels) {
@@ -239,46 +277,45 @@ If the query is purely conceptual (e.g. "Explain the difference between OLED and
       "Which has the best value for money?"
     ];
 
-    // Regex to extract ```json ... ``` block
-    const jsonMatch = rawText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        if (Array.isArray(parsed.products)) {
-          products = parsed.products.map((p, idx) => ({
-            id: p.id || `gem-${Date.now()}-${idx}`,
-            name: p.name || 'Recommended Product',
-            brand: p.brand || 'Top Brand',
-            category: p.category || 'Electronics',
-            price: Number(p.price) || 29999,
-            originalPrice: Number(p.originalPrice) || (Number(p.price) ? Math.round(Number(p.price) * 1.15) : 34999),
-            rating: Number(p.rating) || 4.5,
-            reviews: Number(p.reviews) || 850,
-            image: p.image && p.image.startsWith('http') ? p.image : this.getCategoryPlaceholderImage(p.category || p.name),
-            description: p.description || '',
-            specifications: p.specifications || {},
-            features: Array.isArray(p.features) ? p.features : [],
-            pros: Array.isArray(p.pros) ? p.pros : ['Great performance for its price class'],
-            cons: Array.isArray(p.cons) ? p.cons : ['Standard warranty terms apply'],
-            targetPersonas: Array.isArray(p.targetPersonas) ? p.targetPersonas : ['Everyday Shoppers'],
-            valueScore: Number(p.valueScore) || 9.0,
-            matchScore: Number(p.matchScore) || 95
-          }));
+    const parsed = extractJSON(rawText);
+    if (parsed) {
+      if (Array.isArray(parsed.products) && parsed.products.length > 0) {
+        products = parsed.products.map((p, idx) => ({
+          id: p.id || `gem-${Date.now()}-${idx}`,
+          name: p.name || 'Recommended Product',
+          brand: p.brand || 'Top Brand',
+          category: p.category || 'Electronics',
+          price: Number(p.price) || 29999,
+          originalPrice: Number(p.originalPrice) || (Number(p.price) ? Math.round(Number(p.price) * 1.15) : 34999),
+          rating: Number(p.rating) || 4.5,
+          reviews: Number(p.reviews) || 850,
+          image: p.image && p.image.startsWith('http') ? p.image : this.getCategoryPlaceholderImage(p.category || p.name),
+          description: p.description || '',
+          specifications: p.specifications || {},
+          features: Array.isArray(p.features) ? p.features : [],
+          pros: Array.isArray(p.pros) ? p.pros : ['Great performance for its price class'],
+          cons: Array.isArray(p.cons) ? p.cons : ['Standard warranty terms apply'],
+          targetPersonas: Array.isArray(p.targetPersonas) ? p.targetPersonas : ['Everyday Shoppers'],
+          valueScore: Number(p.valueScore) || 9.0,
+          matchScore: Number(p.matchScore) || 95
+        }));
 
-          // Automatically cache discovered products into productStore so they can be viewed in modals, compared, and wishlisted
-          if (products.length > 0) {
-            productStore.cacheDiscoveredProducts(products).catch(() => {});
-          }
+        // Automatically cache discovered products into productStore so they can be viewed in modals, compared, and wishlisted
+        if (products.length > 0) {
+          productStore.cacheDiscoveredProducts(products).catch(() => {});
         }
-        if (Array.isArray(parsed.followUpChips) && parsed.followUpChips.length > 0) {
-          followUpChips = parsed.followUpChips;
-        }
-        // Remove the JSON block from the user-facing markdown text
-        cleanReply = rawText.replace(jsonMatch[0], '').trim();
-      } catch (err) {
-        console.warn('[LLMService] Failed to parse JSON block from LLM:', err.message);
+      }
+
+      if (Array.isArray(parsed.followUpChips) && parsed.followUpChips.length > 0) {
+        followUpChips = parsed.followUpChips;
       }
     }
+
+    // Strip code fences or raw JSON from user-facing text
+    cleanReply = cleanReply
+      .replace(/```(?:json)?\s*[\s\S]*?```/g, '')
+      .replace(/\{[\s\S]*"products"[\s\S]*\}/g, '')
+      .trim();
 
     return {
       reply: cleanReply,
@@ -297,76 +334,83 @@ If the query is purely conceptual (e.g. "Explain the difference between OLED and
   async searchProductsWithGemini(query) {
     if (!this.geminiClient) return [];
 
-    const prompt = `You are ProductAI, an AI shopping engine. The user is searching the product catalog for: "${query}".
-Search your live knowledge base and generate 3 to 6 real-world, highly accurate product models available in India that match this query.
-Return ONLY a valid JSON code block in the EXACT format below, with realistic Indian Rupee prices (₹), actual specifications, pros, cons, and ratings:
-
-\`\`\`json
+    const prompt = `You are ProductAI, an elite AI product discovery and shopping engine powered directly by Google Gemini.
+The user is searching for: "${query}".
+Search your live knowledge base and generate 3 to 6 real-world, verified product models available in India (Amazon.in, Flipkart, Croma, Reliance Digital) that match this query.
+Return a valid JSON object with key "products" in this exact schema:
 {
   "products": [
     {
-      "id": "gem-search-${Date.now()}-1",
+      "id": "gem-search-1",
       "name": "Full Product Name with Model and Key Spec",
       "brand": "Brand Name",
-      "category": "Category Name",
+      "category": "Category Name (e.g. Laptops, Smartphones, Air Conditioners, Appliances, Shoes, Audio, Cameras)",
       "price": 34999,
       "originalPrice": 42999,
       "rating": 4.6,
       "reviews": 1200,
-      "image": "https://images.unsplash.com/photo-...",
+      "image": "https://images.unsplash.com/...",
       "description": "Accurate 1-sentence product summary.",
       "specifications": {
-        "display": "...",
-        "processor": "...",
-        "battery": "...",
-        "keyFeature": "..."
+        "keyFeature": "...",
+        "displayOrCapacity": "...",
+        "performance": "..."
       },
-      "features": ["Feature 1", "Feature 2", "Feature 3"],
-      "pros": ["Pro 1", "Pro 2"],
-      "cons": ["Con 1"],
-      "targetPersonas": ["Everyday Buyers", "Enthusiasts"],
-      "valueScore": 9.1,
-      "matchScore": 95
+      "features": ["Key Feature 1", "Key Feature 2", "Key Feature 3"],
+      "pros": ["Major strength 1", "Major strength 2"],
+      "cons": ["Minor drawback or trade-off"],
+      "targetPersonas": ["Target user 1", "Target user 2"],
+      "valueScore": 9.2,
+      "matchScore": 96
     }
   ]
-}
-\`\`\``;
+}`;
 
-    const candidateModels = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-1.5-flash'];
+    const candidateModels = [
+      'gemini-3.1-flash-lite',
+      'gemini-flash-latest',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-3.6-flash'
+    ];
+
     for (const modelName of candidateModels) {
       try {
-        const model = this.geminiClient.getGenerativeModel({ model: modelName });
+        const model = this.geminiClient.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.2
+          }
+        });
         const result = await model.generateContent(prompt);
         const text = result.response.text();
-        const jsonMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[1]);
-          if (Array.isArray(parsed.products) && parsed.products.length > 0) {
-            const mapped = parsed.products.map((p, idx) => ({
-              id: p.id || `gem-search-${Date.now()}-${idx}`,
-              name: p.name || 'Recommended Product',
-              brand: p.brand || 'Top Brand',
-              category: p.category || 'Electronics',
-              price: Number(p.price) || 24999,
-              originalPrice: Number(p.originalPrice) || Math.round((Number(p.price) || 24999) * 1.15),
-              rating: Number(p.rating) || 4.5,
-              reviews: Number(p.reviews) || 850,
-              image: p.image && p.image.startsWith('http') ? p.image : this.getCategoryPlaceholderImage(p.category || p.name),
-              description: p.description || '',
-              specifications: p.specifications || {},
-              features: Array.isArray(p.features) ? p.features : [],
-              pros: Array.isArray(p.pros) ? p.pros : ['High quality and reliable performance'],
-              cons: Array.isArray(p.cons) ? p.cons : ['Standard warranty terms apply'],
-              targetPersonas: Array.isArray(p.targetPersonas) ? p.targetPersonas : ['Shoppers'],
-              valueScore: Number(p.valueScore) || 9.0,
-              matchScore: Number(p.matchScore) || 95
-            }));
-            await productStore.cacheDiscoveredProducts(mapped);
-            return mapped;
-          }
+        const parsed = extractJSON(text);
+        if (parsed && Array.isArray(parsed.products) && parsed.products.length > 0) {
+          const mapped = parsed.products.map((p, idx) => ({
+            id: p.id || `gem-search-${Date.now()}-${idx}`,
+            name: p.name || 'Recommended Product',
+            brand: p.brand || 'Top Brand',
+            category: p.category || 'General',
+            price: Number(p.price) || 19999,
+            originalPrice: Number(p.originalPrice) || Math.round((Number(p.price) || 19999) * 1.15),
+            rating: Number(p.rating) || 4.5,
+            reviews: Number(p.reviews) || 620,
+            image: p.image && p.image.startsWith('http') ? p.image : this.getCategoryPlaceholderImage(p.category || p.name),
+            description: p.description || '',
+            specifications: p.specifications || {},
+            features: Array.isArray(p.features) ? p.features : [],
+            pros: Array.isArray(p.pros) ? p.pros : ['High quality and verified performance'],
+            cons: Array.isArray(p.cons) ? p.cons : ['Standard warranty policy'],
+            targetPersonas: Array.isArray(p.targetPersonas) ? p.targetPersonas : ['Everyday Shoppers'],
+            valueScore: Number(p.valueScore) || 9.1,
+            matchScore: Number(p.matchScore) || 95
+          }));
+          await productStore.cacheDiscoveredProducts(mapped);
+          return mapped;
         }
       } catch (err) {
-        console.warn(`[LLMService] searchProductsWithGemini with ${modelName} failed:`, err.message);
+        console.warn(`[LLMService] searchProductsWithGemini with ${modelName} failed (${err.message}), trying next candidate...`);
       }
     }
     return [];
