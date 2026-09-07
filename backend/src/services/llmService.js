@@ -413,6 +413,18 @@ Return a valid JSON object with key "products" in this exact schema:
         console.warn(`[LLMService] searchProductsWithGemini with ${modelName} failed (${err.message}), trying next candidate...`);
       }
     }
+
+    // Fallback: If Gemini API encounters temporary 503 demand spikes, use domain intelligence engine
+    try {
+      const fallbackResult = aiEngine.generateOpenDomainProducts(query, {}, {}, {});
+      if (fallbackResult && Array.isArray(fallbackResult.products) && fallbackResult.products.length > 0) {
+        await productStore.cacheDiscoveredProducts(fallbackResult.products);
+        return fallbackResult.products;
+      }
+    } catch (fallbackErr) {
+      console.warn('[LLMService] Fallback domain engine notice:', fallbackErr.message);
+    }
+
     return [];
   }
 
